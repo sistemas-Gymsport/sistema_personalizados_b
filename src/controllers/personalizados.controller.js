@@ -3,6 +3,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/sendResponse');
 const ApiError = require('../utils/ApiError');
 const { createPersonalizadoWithFolio } = require('../services/folioService');
+const { computeTotal } = require('../services/pricingService');
 
 const include = {
   sucursal: true,
@@ -11,10 +12,17 @@ const include = {
   paquete: true,
   formaPago: true,
   estatusPago: true,
+  createdBy: { select: { id: true, name: true, username: true } },
+  comisiones: { include: { estatus: true }, orderBy: { period: 'desc' } },
 };
 
 function withComputed(p) {
-  return { ...p, sessionsPending: Math.max(p.sessionsContracted - p.sessionsRealized, 0) };
+  return {
+    ...p,
+    sessionsPending: Math.max(p.sessionsContracted - p.sessionsRealized, 0),
+    subtotal: p.salePrice,
+    total: computeTotal(p),
+  };
 }
 
 const list = asyncHandler(async (req, res) => {
@@ -84,6 +92,11 @@ const create = asyncHandler(async (req, res) => {
     estatusPagoId,
     startDate,
     dueDate,
+    concepto,
+    descuento,
+    recargos,
+    cargoExtra,
+    notas,
   } = req.body;
 
   if (!saleDate || !sucursalId || !socioId || !instructorId || !paqueteId || !sessionsContracted || !salePrice) {
@@ -103,6 +116,11 @@ const create = asyncHandler(async (req, res) => {
     estatusPagoId: estatusPagoId || null,
     startDate: startDate ? new Date(startDate) : null,
     dueDate: dueDate ? new Date(dueDate) : null,
+    concepto: concepto || null,
+    descuento: descuento || 0,
+    recargos: recargos || 0,
+    cargoExtra: cargoExtra || 0,
+    notas: notas || null,
     createdById: req.user.id,
     updatedById: req.user.id,
   });
@@ -125,6 +143,11 @@ const update = asyncHandler(async (req, res) => {
     estatusPagoId,
     startDate,
     dueDate,
+    concepto,
+    descuento,
+    recargos,
+    cargoExtra,
+    notas,
   } = req.body;
 
   const data = { updatedById: req.user.id };
@@ -140,6 +163,11 @@ const update = asyncHandler(async (req, res) => {
   if (estatusPagoId !== undefined) data.estatusPagoId = estatusPagoId || null;
   if (startDate !== undefined) data.startDate = startDate ? new Date(startDate) : null;
   if (dueDate !== undefined) data.dueDate = dueDate ? new Date(dueDate) : null;
+  if (concepto !== undefined) data.concepto = concepto || null;
+  if (descuento !== undefined) data.descuento = descuento || 0;
+  if (recargos !== undefined) data.recargos = recargos || 0;
+  if (cargoExtra !== undefined) data.cargoExtra = cargoExtra || 0;
+  if (notas !== undefined) data.notas = notas || null;
 
   const item = await prisma.personalizado.update({ where: { id: req.params.id }, data, include });
   sendSuccess(res, 200, withComputed(item));

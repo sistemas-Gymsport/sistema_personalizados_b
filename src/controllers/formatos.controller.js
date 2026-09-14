@@ -4,24 +4,34 @@ const { sendSuccess } = require('../utils/sendResponse');
 const ApiError = require('../utils/ApiError');
 
 const include = { margin: true };
+const PAPER_SIZES = ['TICKET_58', 'TICKET_80', 'CARTA', 'LEGAL'];
 
 const list = asyncHandler(async (req, res) => {
-  const { search, dateFrom, dateTo, active, page = '1', pageSize = '20' } = req.query;
+  const { search, dateFrom, dateTo, active, paperSize, sort, all, page = '1', pageSize = '20' } = req.query;
   const where = {};
   if (search) where.name = { contains: search, mode: 'insensitive' };
   if (active === 'true') where.active = true;
   if (active === 'false') where.active = false;
+  if (paperSize && PAPER_SIZES.includes(paperSize)) where.paperSize = paperSize;
   if (dateFrom || dateTo) {
     where.createdAt = {};
     if (dateFrom) where.createdAt.gte = new Date(dateFrom);
     if (dateTo) where.createdAt.lte = new Date(dateTo);
   }
 
+  const orderBy =
+    sort === 'name' ? { name: 'asc' } : sort === 'oldest' ? { updatedAt: 'asc' } : { updatedAt: 'desc' };
+
+  if (all === 'true') {
+    const items = await prisma.formato.findMany({ where, include, orderBy });
+    return sendSuccess(res, 200, items);
+  }
+
   const take = Math.min(parseInt(pageSize, 10) || 20, 100);
   const skip = (Math.max(parseInt(page, 10) || 1, 1) - 1) * take;
 
   const [items, total] = await Promise.all([
-    prisma.formato.findMany({ where, include, orderBy: { updatedAt: 'desc' }, skip, take }),
+    prisma.formato.findMany({ where, include, orderBy, skip, take }),
     prisma.formato.count({ where }),
   ]);
   sendSuccess(res, 200, items, { total, page: Number(page), pageSize: take });
@@ -39,13 +49,20 @@ function validateFieldsConfig(fieldsConfig) {
   }
 }
 
+function validatePaperSize(paperSize) {
+  if (paperSize !== undefined && !PAPER_SIZES.includes(paperSize)) {
+    throw new ApiError(400, `Tamano de papel invalido. Usa uno de: ${PAPER_SIZES.join(', ')}.`);
+  }
+}
+
 const create = asyncHandler(async (req, res) => {
-  const { name, logoUrl, logoPublicId, marginId, fieldsConfig } = req.body;
+  const { name, paperSize, logoUrl, logoPublicId, marginId, fieldsConfig } = req.body;
 
   // El logo y el margen son obligatorios: no se permite guardar sin ellos.
   if (!name) throw new ApiError(400, 'El nombre del formato es obligatorio.');
   if (!logoUrl || !logoPublicId) throw new ApiError(400, 'El logo es obligatorio para crear un formato.');
   if (!marginId) throw new ApiError(400, 'El margen es obligatorio para crear un formato.');
+  validatePaperSize(paperSize);
   validateFieldsConfig(fieldsConfig);
 
   const margin = await prisma.margin.findUnique({ where: { id: marginId } });
@@ -54,6 +71,7 @@ const create = asyncHandler(async (req, res) => {
   const item = await prisma.formato.create({
     data: {
       name,
+      paperSize: paperSize || 'TICKET_80',
       logoUrl,
       logoPublicId,
       marginId,
@@ -67,10 +85,14 @@ const create = asyncHandler(async (req, res) => {
 });
 
 const update = asyncHandler(async (req, res) => {
-  const { name, logoUrl, logoPublicId, marginId, fieldsConfig } = req.body;
+  const { name, paperSize, logoUrl, logoPublicId, marginId, fieldsConfig } = req.body;
   const data = { updatedById: req.user.id };
 
   if (name !== undefined) data.name = name;
+  if (paperSize !== undefined) {
+    validatePaperSize(paperSize);
+    data.paperSize = paperSize;
+  }
   if (fieldsConfig !== undefined) {
     validateFieldsConfig(fieldsConfig);
     data.fieldsConfig = fieldsConfig;
@@ -96,8 +118,9 @@ const duplicate = asyncHandler(async (req, res) => {
 
   const copy = await prisma.formato.create({
     data: {
-      name: `Copia de ${original.name}`,
+      name: `${original.name} - copia`,
       active: false,
+      paperSize: original.paperSize,
       logoUrl: original.logoUrl,
       logoPublicId: original.logoPublicId,
       marginId: original.marginId,
@@ -138,6 +161,7 @@ const registrarImpresion = asyncHandler(async (req, res) => {
 
   const snapshotConfig = {
     name: formato.name,
+    paperSize: formato.paperSize,
     logoUrl: formato.logoUrl,
     margin: { top: formato.margin.top, right: formato.margin.right, bottom: formato.margin.bottom, left: formato.margin.left },
     fieldsConfig: formato.fieldsConfig,
