@@ -1,0 +1,460 @@
+// ============================================================================
+// Prisma schema - Sistema de Personalizados GymSport
+// PostgreSQL (Neon). Ver README.md para el detalle de decisiones de diseno.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Usuarios y autenticacion
+// ----------------------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  COLABORADOR
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  username     String   @unique
+  passwordHash String
+  role         UserRole @default(COLABORADOR)
+  sucursalId   String?
+  sucursal     Sucursal? @relation(fields: [sucursalId], references: [id])
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Perfil de instructor asociado (solo aplica a usuarios COLABORADOR que
+  // tambien registran sesiones/comisiones). Opcional y 1-1.
+  instructorProfile Instructor?
+
+  personalizadosCreated Personalizado[] @relation("PersonalizadoCreatedBy")
+  personalizadosUpdated Personalizado[] @relation("PersonalizadoUpdatedBy")
+  sesionesCreated       Sesion[]        @relation("SesionCreatedBy")
+  sesionesUpdated       Sesion[]        @relation("SesionUpdatedBy")
+  comisionesCreated     Comision[]      @relation("ComisionCreatedBy")
+  comisionesUpdated     Comision[]      @relation("ComisionUpdatedBy")
+  cortesCreated         CorteComision[] @relation("CorteCreatedBy")
+  formatosCreated       Formato[]       @relation("FormatoCreatedBy")
+  formatosUpdated       Formato[]       @relation("FormatoUpdatedBy")
+  impresiones           FormatoImpreso[] @relation("FormatoImpresoUser")
+  fieldValuesUpdated    FieldValue[]    @relation("FieldValueUpdatedBy")
+
+  @@index([sucursalId])
+  @@map("users")
+}
+
+// ----------------------------------------------------------------------------
+// Catalogos simples (activables/desactivables, sin borrado fisico)
+// ----------------------------------------------------------------------------
+
+enum CatalogType {
+  FORMA_PAGO
+  ESTATUS_PAGO
+  ESTATUS_SESION
+  ESTATUS_COMISION
+}
+
+model CatalogItem {
+  id        String      @id @default(cuid())
+  type      CatalogType
+  name      String
+  order     Int         @default(0)
+  active    Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  personalizadosFormaPago   Personalizado[] @relation("PersonalizadoFormaPago")
+  personalizadosEstatusPago Personalizado[] @relation("PersonalizadoEstatusPago")
+  sesionesEstatus           Sesion[]        @relation("SesionEstatus")
+  comisionesEstatus         Comision[]      @relation("ComisionEstatus")
+
+  @@unique([type, name])
+  @@index([type, active])
+  @@map("catalog_items")
+}
+
+model Sucursal {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  address   String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  personalizados Personalizado[]
+  sesiones       Sesion[]
+  cortes         CorteComision[]
+  usuarios       User[]
+
+  @@map("sucursales")
+}
+
+model Instructor {
+  id                        String   @id @default(cuid())
+  name                      String
+  email                     String?
+  phone                     String?
+  defaultCommissionPercent  Decimal  @default(0) @db.Decimal(5, 2)
+  active                    Boolean  @default(true)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  // Enlaza este instructor con su cuenta de acceso (User con rol COLABORADOR),
+  // si el instructor tiene login propio en el sistema. Opcional y 1-1.
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id])
+
+  personalizados   Personalizado[]
+  sesiones         Sesion[]
+  comisiones       Comision[]
+  reglasComision   CommissionRule[]
+  cortes           CorteComision[]
+
+  @@map("instructores")
+}
+
+model Paquete {
+  id             String   @id @default(cuid())
+  name           String
+  sessionsCount  Int
+  price          Decimal  @db.Decimal(10, 2)
+  sessionValue   Decimal  @db.Decimal(10, 2)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  personalizados Personalizado[]
+
+  @@map("paquetes")
+}
+
+model Socio {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  personalizados Personalizado[]
+
+  @@map("socios")
+}
+
+// Reglas de comision configurables (por instructor o regla global si instructorId es null)
+model CommissionRule {
+  id           String      @id @default(cuid())
+  instructorId String?
+  instructor   Instructor? @relation(fields: [instructorId], references: [id], onDelete: Cascade)
+  percent      Decimal     @db.Decimal(5, 2)
+  active       Boolean     @default(true)
+  description  String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([instructorId, active])
+  @@map("commission_rules")
+}
+
+// Margenes de impresion (catalogo extensible, ligado a formatos)
+model Margin {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  top       Float
+  right     Float
+  bottom    Float
+  left      Float
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  formatos Formato[]
+
+  @@map("margins")
+}
+
+// ----------------------------------------------------------------------------
+// Personalizados
+// ----------------------------------------------------------------------------
+
+model Personalizado {
+  id                 String    @id @default(cuid())
+  folio              String    @unique
+  saleDate           DateTime
+  sucursalId         String
+  sucursal           Sucursal  @relation(fields: [sucursalId], references: [id])
+  socioId            String
+  socio              Socio     @relation(fields: [socioId], references: [id])
+  instructorId       String
+  instructor         Instructor @relation(fields: [instructorId], references: [id])
+  paqueteId          String
+  paquete            Paquete   @relation(fields: [paqueteId], references: [id])
+  sessionsContracted Int
+  salePrice          Decimal   @db.Decimal(10, 2)
+  formaPagoId        String?
+  formaPago          CatalogItem? @relation("PersonalizadoFormaPago", fields: [formaPagoId], references: [id])
+  paymentDate        DateTime?
+  estatusPagoId      String?
+  estatusPago        CatalogItem? @relation("PersonalizadoEstatusPago", fields: [estatusPagoId], references: [id])
+  sessionsRealized   Int       @default(0)
+  startDate          DateTime?
+  dueDate            DateTime?
+  active             Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  createdById        String?
+  createdBy          User?     @relation("PersonalizadoCreatedBy", fields: [createdById], references: [id])
+  updatedById        String?
+  updatedBy          User?     @relation("PersonalizadoUpdatedBy", fields: [updatedById], references: [id])
+
+  sesiones   Sesion[]
+  comisiones Comision[]
+
+  @@index([sucursalId])
+  @@index([instructorId])
+  @@index([socioId])
+  @@index([saleDate])
+  @@map("personalizados")
+}
+
+// sessionsPending se calcula en la capa de aplicacion como
+// sessionsContracted - sessionsRealized (no se persiste para evitar inconsistencias).
+
+// ----------------------------------------------------------------------------
+// Sesiones
+// ----------------------------------------------------------------------------
+
+model Sesion {
+  id              String    @id @default(cuid())
+  personalizadoId String
+  personalizado   Personalizado @relation(fields: [personalizadoId], references: [id], onDelete: Cascade)
+  sessionNumber   Int
+  date            DateTime
+  time            String?
+  instructorId    String
+  instructor      Instructor @relation(fields: [instructorId], references: [id])
+  sucursalId      String
+  sucursal        Sucursal  @relation(fields: [sucursalId], references: [id])
+  estatusId       String?
+  estatus         CatalogItem? @relation("SesionEstatus", fields: [estatusId], references: [id])
+  realizada       Boolean   @default(false)
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  createdById     String?
+  createdBy       User?     @relation("SesionCreatedBy", fields: [createdById], references: [id])
+  updatedById     String?
+  updatedBy       User?     @relation("SesionUpdatedBy", fields: [updatedById], references: [id])
+
+  @@unique([personalizadoId, sessionNumber])
+  @@index([personalizadoId])
+  @@index([instructorId])
+  @@index([sucursalId])
+  @@index([date])
+  @@map("sesiones")
+}
+
+// ----------------------------------------------------------------------------
+// Comisiones y cortes
+// ----------------------------------------------------------------------------
+
+model Comision {
+  id               String    @id @default(cuid())
+  personalizadoId  String
+  personalizado    Personalizado @relation(fields: [personalizadoId], references: [id])
+  instructorId     String
+  instructor       Instructor @relation(fields: [instructorId], references: [id])
+  period           String    // formato "YYYY-MM"
+  sessionsRealized Int
+  sessionValue     Decimal   @db.Decimal(10, 2)
+  percent          Decimal   @db.Decimal(5, 2)
+  generatedAmount  Decimal   @db.Decimal(10, 2)
+  paidAmount       Decimal   @default(0) @db.Decimal(10, 2)
+  paymentDate      DateTime?
+  estatusId        String?
+  estatus          CatalogItem? @relation("ComisionEstatus", fields: [estatusId], references: [id])
+  observaciones    String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  createdById      String?
+  createdBy        User?     @relation("ComisionCreatedBy", fields: [createdById], references: [id])
+  updatedById      String?
+  updatedBy         User?    @relation("ComisionUpdatedBy", fields: [updatedById], references: [id])
+
+  corteItems CorteComisionItem[]
+
+  @@index([instructorId, period])
+  @@index([period])
+  @@map("comisiones")
+}
+
+model CorteComision {
+  id            String   @id @default(cuid())
+  instructorId  String
+  instructor    Instructor @relation(fields: [instructorId], references: [id])
+  sucursalId    String?
+  sucursal      Sucursal? @relation(fields: [sucursalId], references: [id])
+  period        String
+  amount        Decimal  @db.Decimal(10, 2)
+  date          DateTime @default(now())
+  observaciones String?
+  createdAt     DateTime @default(now())
+  createdById   String?
+  createdBy     User?    @relation("CorteCreatedBy", fields: [createdById], references: [id])
+
+  items CorteComisionItem[]
+
+  @@index([instructorId, period])
+  @@map("cortes_comision")
+}
+
+// Relacion muchos-a-muchos explicita entre un corte y las comisiones que liquida
+model CorteComisionItem {
+  id              String        @id @default(cuid())
+  corteId         String
+  corte           CorteComision @relation(fields: [corteId], references: [id], onDelete: Cascade)
+  comisionId      String
+  comision        Comision      @relation(fields: [comisionId], references: [id])
+  amountApplied   Decimal       @db.Decimal(10, 2)
+
+  @@unique([corteId, comisionId])
+  @@map("cortes_comision_items")
+}
+
+// ----------------------------------------------------------------------------
+// Campos dinamicos / configurables
+// ----------------------------------------------------------------------------
+
+enum FieldEntity {
+  PERSONALIZADO
+  SESION
+  COMISION
+  SOCIO
+}
+
+enum FieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  TIME
+  CURRENCY
+  BOOLEAN
+  SELECT
+}
+
+model FieldDefinition {
+  id            String      @id @default(cuid())
+  entity        FieldEntity
+  key           String
+  label         String
+  type          FieldType
+  required      Boolean     @default(false)
+  active        Boolean     @default(true)
+  order         Int         @default(0)
+  configuration Json?       // opciones de SELECT, min/max, placeholder, etc.
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  values FieldValue[]
+
+  @@unique([entity, key])
+  @@index([entity, active])
+  @@map("field_definitions")
+}
+
+// recordId es una referencia polimorfica (apunta a Personalizado, Sesion,
+// Comision o Socio segun FieldDefinition.entity). A proposito NO tiene FK de
+// base de datos: una sola definicion puede aplicar a distintas tablas.
+model FieldValue {
+  id                String          @id @default(cuid())
+  fieldDefinitionId String
+  fieldDefinition   FieldDefinition @relation(fields: [fieldDefinitionId], references: [id])
+  recordId          String
+  value             String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  updatedById       String?
+  updatedBy         User?           @relation("FieldValueUpdatedBy", fields: [updatedById], references: [id])
+
+  @@unique([fieldDefinitionId, recordId])
+  @@index([recordId])
+  @@map("field_values")
+}
+
+// ----------------------------------------------------------------------------
+// Formatos de impresion
+// ----------------------------------------------------------------------------
+
+model Formato {
+  id          String   @id @default(cuid())
+  name        String
+  active      Boolean  @default(true)
+  logoUrl     String
+  logoPublicId String
+  marginId    String
+  margin      Margin   @relation(fields: [marginId], references: [id])
+  fieldsConfig Json    // array de { key, label, source, order, align, size, visible, staticText, type }
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdById String?
+  createdBy   User?    @relation("FormatoCreatedBy", fields: [createdById], references: [id])
+  updatedById String?
+  updatedBy   User?    @relation("FormatoUpdatedBy", fields: [updatedById], references: [id])
+
+  impresiones FormatoImpreso[]
+
+  @@index([active])
+  @@index([name])
+  @@map("formatos")
+}
+
+// Historial/auditoria de cada impresion generada, con snapshot para reconstruccion
+model FormatoImpreso {
+  id             String   @id @default(cuid())
+  formatoId      String
+  formato        Formato  @relation(fields: [formatoId], references: [id])
+  snapshotConfig Json     // copia congelada de logo/margen/campos usados
+  snapshotValues Json     // valores capturados al momento de imprimir
+  generatedAt    DateTime @default(now())
+  generatedById  String?
+  generatedBy    User?    @relation("FormatoImpresoUser", fields: [generatedById], references: [id])
+
+  @@index([formatoId])
+  @@index([generatedAt])
+  @@map("formatos_impresos")
+}
+
+// ----------------------------------------------------------------------------
+// Configuracion visual (CMS interno de apariencia)
+// ----------------------------------------------------------------------------
+
+model ThemeConfig {
+  id              String   @id @default("default")
+  systemName      String   @default("GymSport")
+  primaryColor    String   @default("#1d4ed8")
+  secondaryColor  String   @default("#0f172a")
+  backgroundColor String   @default("#f8fafc")
+  textColor       String   @default("#0f172a")
+  buttonColor     String   @default("#1d4ed8")
+  logoUrl         String?
+  logoPublicId    String?
+  faviconUrl      String?
+  faviconPublicId String?
+  welcomeMessage  String   @default("Bienvenido al sistema de personalizados")
+  updatedAt       DateTime @updatedAt
+
+  @@map("theme_config")
+}
