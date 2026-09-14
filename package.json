@@ -13,7 +13,8 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "node prisma/seed.js",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test": "jest"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
@@ -22,6 +23,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.21.1",
     "express-validator": "^7.2.0",
     "jsonwebtoken": "^9.0.2",
@@ -29,6 +31,7 @@
     "multer": "^2.3.0"
   },
   "devDependencies": {
+    "jest": "^30.5.1",
     "nodemon": "^3.1.7",
     "prisma": "^5.20.0"
   },

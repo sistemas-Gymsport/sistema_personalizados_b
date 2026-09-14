@@ -21,13 +21,23 @@ function uploadBuffer(buffer, folder) {
 }
 
 const uploadImage = asyncHandler(async (req, res) => {
+  if (!cloudinary.isConfigured) {
+    throw new ApiError(503, 'El servicio de imagenes no esta configurado (Cloudinary). Contacta al administrador.');
+  }
   if (!req.file) throw new ApiError(400, 'No se recibio ningun archivo.');
   if (!ALLOWED_MIME.includes(req.file.mimetype)) {
     throw new ApiError(400, 'Formato de imagen no permitido. Usa PNG, JPG, WEBP o SVG.');
   }
 
   const folder = req.body.folder === 'theme' ? 'gymsport/theme' : 'gymsport/formatos';
-  const result = await uploadBuffer(req.file.buffer, folder);
+
+  let result;
+  try {
+    result = await uploadBuffer(req.file.buffer, folder);
+  } catch (err) {
+    console.error('[Cloudinary] Fallo al subir imagen:', err.message);
+    throw new ApiError(502, 'No fue posible subir la imagen. Intenta de nuevo en unos momentos.');
+  }
 
   sendSuccess(res, 201, {
     url: result.secure_url,
@@ -40,7 +50,15 @@ const uploadImage = asyncHandler(async (req, res) => {
 const deleteImage = asyncHandler(async (req, res) => {
   const { publicId } = req.body;
   if (!publicId) throw new ApiError(400, 'publicId es obligatorio.');
-  await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
+  if (!cloudinary.isConfigured) {
+    throw new ApiError(503, 'El servicio de imagenes no esta configurado (Cloudinary). Contacta al administrador.');
+  }
+  try {
+    await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
+  } catch (err) {
+    console.error('[Cloudinary] Fallo al eliminar imagen:', err.message);
+    throw new ApiError(502, 'No fue posible eliminar la imagen anterior.');
+  }
   sendSuccess(res, 200, { deleted: true });
 });
 

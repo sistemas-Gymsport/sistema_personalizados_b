@@ -13,6 +13,7 @@ router.use('/comisiones', require('./comisiones.routes'));
 router.use('/cortes', require('./cortes.routes'));
 router.use('/fields', require('./fields.routes'));
 router.use('/formatos', require('./formatos.routes'));
+router.use('/datasets', require('./datasets.routes'));
 router.use('/upload', require('./upload.routes'));
 router.use('/theme', require('./theme.routes'));
 router.use('/dashboard', require('./dashboard.routes'));

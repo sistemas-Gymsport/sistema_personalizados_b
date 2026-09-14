@@ -49,6 +49,7 @@ model User {
   formatosUpdated       Formato[]       @relation("FormatoUpdatedBy")
   impresiones           FormatoImpreso[] @relation("FormatoImpresoUser")
   fieldValuesUpdated    FieldValue[]    @relation("FieldValueUpdatedBy")
+  datasetsCreated       Dataset[]       @relation("DatasetCreatedBy")
 
   @@index([sucursalId])
   @@map("users")
@@ -426,7 +427,14 @@ model Formato {
   logoPublicId String
   marginId    String
   margin      Margin   @relation(fields: [marginId], references: [id])
-  fieldsConfig Json    // array de { key, label, group, align, visible, order, type, staticText }
+  // Si el formato se construyo a partir de un Excel importado (ver Dataset),
+  // aqui queda la referencia. Null para formatos basados en Personalizado.
+  // onDelete SetNull: si el dataset expira/se borra, el formato y su
+  // configuracion (logo, campos, etc.) siguen existiendo, solo pierde la
+  // capacidad de "generar" contra ese dataset especifico.
+  datasetId   String?
+  dataset     Dataset? @relation(fields: [datasetId], references: [id], onDelete: SetNull)
+  fieldsConfig Json    // array de { key, label, group, align, visible, order, type, staticText, url, publicId }
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   createdById String?
@@ -438,6 +446,7 @@ model Formato {
 
   @@index([active])
   @@index([name])
+  @@index([datasetId])
   @@map("formatos")
 }
 
@@ -455,6 +464,90 @@ model FormatoImpreso {
   @@index([formatoId])
   @@index([generatedAt])
   @@map("formatos_impresos")
+}
+
+// ----------------------------------------------------------------------------
+// Datasets importados desde Excel (temporales, expiran a los 45 dias)
+// ----------------------------------------------------------------------------
+// Diseno deliberadamente flexible (EAV: columnas y valores como filas, no
+// como columnas fijas de una tabla) porque cada Excel que suba el usuario
+// puede traer columnas distintas. Asi nunca hace falta tocar schema.prisma
+// cuando cambia la estructura de un Excel.
+
+enum DatasetStatus {
+  ACTIVE
+  EXPIRED
+}
+
+model Dataset {
+  id          String        @id @default(cuid())
+  fileName    String
+  rowCount    Int           @default(0)
+  columnCount Int           @default(0)
+  status      DatasetStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  // Se calcula al crear el dataset como createdAt + 45 dias (ver
+  // datasetService.js). Un job/endpoint de limpieza borra lo que ya expiro.
+  expiresAt   DateTime
+  createdById String?
+  createdBy   User?         @relation("DatasetCreatedBy", fields: [createdById], references: [id])
+
+  columns DatasetColumn[]
+  rows    DatasetRow[]
+  formatos Formato[]
+
+  @@index([expiresAt])
+  @@index([createdById])
+  @@map("datasets")
+}
+
+// Una columna detectada del Excel (una por cada encabezado de la hoja).
+model DatasetColumn {
+  id            String   @id @default(cuid())
+  datasetId     String
+  dataset       Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  originalName  String
+  // Clave normalizada (sin acentos/espacios) usada como "key" del campo en
+  // el formato de impresion, ej. "Nombre del Socio" -> "nombre_del_socio".
+  normalizedKey String
+  // Heuristica simple: TEXT | NUMBER | DATE | CURRENCY (ver datasetService.js)
+  detectedType  String
+  order         Int
+
+  values DatasetValue[]
+
+  @@unique([datasetId, normalizedKey])
+  @@index([datasetId])
+  @@map("dataset_columns")
+}
+
+// Una fila del Excel (una por cada registro/persona).
+model DatasetRow {
+  id        String   @id @default(cuid())
+  datasetId String
+  dataset   Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  rowNumber Int
+
+  values DatasetValue[]
+
+  @@index([datasetId])
+  @@map("dataset_rows")
+}
+
+// El valor de una columna especifica en una fila especifica (celda). Se
+// guarda siempre como texto; el "detectedType" de la columna indica como
+// debe formatearse/interpretarse al mostrarse.
+model DatasetValue {
+  id       String        @id @default(cuid())
+  rowId    String
+  row      DatasetRow    @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  columnId String
+  column   DatasetColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  value    String?
+
+  @@unique([rowId, columnId])
+  @@index([columnId])
+  @@map("dataset_values")
 }
 
 // ----------------------------------------------------------------------------

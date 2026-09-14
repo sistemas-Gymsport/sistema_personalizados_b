@@ -3,16 +3,17 @@ const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/sendResponse');
 const ApiError = require('../utils/ApiError');
 
-const include = { margin: true };
+const include = { margin: true, dataset: { select: { id: true, fileName: true, expiresAt: true } } };
 const PAPER_SIZES = ['TICKET_58', 'TICKET_80', 'CARTA', 'LEGAL'];
 
 const list = asyncHandler(async (req, res) => {
-  const { search, dateFrom, dateTo, active, paperSize, sort, all, page = '1', pageSize = '20' } = req.query;
+  const { search, dateFrom, dateTo, active, paperSize, datasetId, sort, all, page = '1', pageSize = '20' } = req.query;
   const where = {};
   if (search) where.name = { contains: search, mode: 'insensitive' };
   if (active === 'true') where.active = true;
   if (active === 'false') where.active = false;
   if (paperSize && PAPER_SIZES.includes(paperSize)) where.paperSize = paperSize;
+  if (datasetId) where.datasetId = datasetId;
   if (dateFrom || dateTo) {
     where.createdAt = {};
     if (dateFrom) where.createdAt.gte = new Date(dateFrom);
@@ -56,7 +57,7 @@ function validatePaperSize(paperSize) {
 }
 
 const create = asyncHandler(async (req, res) => {
-  const { name, paperSize, logoUrl, logoPublicId, marginId, fieldsConfig } = req.body;
+  const { name, paperSize, logoUrl, logoPublicId, marginId, fieldsConfig, datasetId } = req.body;
 
   // El logo y el margen son obligatorios: no se permite guardar sin ellos.
   if (!name) throw new ApiError(400, 'El nombre del formato es obligatorio.');
@@ -68,6 +69,11 @@ const create = asyncHandler(async (req, res) => {
   const margin = await prisma.margin.findUnique({ where: { id: marginId } });
   if (!margin) throw new ApiError(400, 'El margen indicado no existe.');
 
+  if (datasetId) {
+    const dataset = await prisma.dataset.findUnique({ where: { id: datasetId } });
+    if (!dataset) throw new ApiError(400, 'El archivo (dataset) indicado no existe o ya expiro.');
+  }
+
   const item = await prisma.formato.create({
     data: {
       name,
@@ -76,6 +82,7 @@ const create = asyncHandler(async (req, res) => {
       logoPublicId,
       marginId,
       fieldsConfig,
+      datasetId: datasetId || null,
       createdById: req.user.id,
       updatedById: req.user.id,
     },
@@ -85,8 +92,9 @@ const create = asyncHandler(async (req, res) => {
 });
 
 const update = asyncHandler(async (req, res) => {
-  const { name, paperSize, logoUrl, logoPublicId, marginId, fieldsConfig } = req.body;
+  const { name, paperSize, logoUrl, logoPublicId, marginId, fieldsConfig, datasetId } = req.body;
   const data = { updatedById: req.user.id };
+  if (datasetId !== undefined) data.datasetId = datasetId || null;
 
   if (name !== undefined) data.name = name;
   if (paperSize !== undefined) {
@@ -125,6 +133,7 @@ const duplicate = asyncHandler(async (req, res) => {
       logoPublicId: original.logoPublicId,
       marginId: original.marginId,
       fieldsConfig: original.fieldsConfig,
+      datasetId: original.datasetId,
       createdById: req.user.id,
       updatedById: req.user.id,
     },
