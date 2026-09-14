@@ -115,6 +115,71 @@ describe('datasetService.parseWorkbook', () => {
     const buf = await wb.xlsx.writeBuffer();
     await expect(parseWorkbook(buf)).rejects.toThrow(/vacio/i);
   });
+
+  test('Excel realista: acentos, la letra Ñ, nombres/notas largas, celdas vacias, duplicados y varias sucursales', async () => {
+    const notaLarga =
+      'Cliente solicito reprogramar sus sesiones de la tercera semana por motivos de salud, ' +
+      'se le otorgo una extension de 15 dias adicionales sin costo segun politica de la sucursal.';
+    const buf = await bufferFromRows([
+      ['Folio', 'Fecha de Venta', 'Hora', 'Sucursal', 'Nombre del Socio', 'Instructor', 'Precio de Venta', 'Notas'],
+      ['PER-2001', new Date('2026-09-01'), '10:30:00', 'Geoplazas', 'Íñigo Muñoz Peña', 'María José Núñez', 899.5, notaLarga],
+      ['PER-2002', new Date('2026-09-02'), '11:00:00', 'Toscana', 'José Ángel Domínguez Jiménez', 'Andrés Núñez', 499, null],
+      ['PER-2003', new Date('2026-09-03'), '12:15:00', 'Lomas', 'Ma. Guadalupe Peña Ñáñez', '', 250, ''],
+      // Folio duplicado a proposito: el sistema no debe deduplicar ni truena.
+      ['PER-2001', new Date('2026-09-04'), '13:00:00', 'Satélite', 'Íñigo Muñoz Peña', 'María José Núñez', 899.5, ''],
+    ]);
+
+    const { columns, rows } = await parseWorkbook(buf);
+
+    expect(rows).toHaveLength(4);
+
+    // Acentos y Ñ se preservan tal cual (no se translitera el VALOR, solo la key).
+    expect(rows[0].values.nombre_del_socio).toBe('Íñigo Muñoz Peña');
+    expect(rows[1].values.nombre_del_socio).toBe('José Ángel Domínguez Jiménez');
+    expect(rows[2].values.nombre_del_socio).toBe('Ma. Guadalupe Peña Ñáñez');
+
+    // La columna "Sucursal" normaliza su KEY sin acentos, aunque el header
+    // no tenga ninguno en este caso; se prueba con una columna que si los
+    // tiene (Nombre del Socio) y con Ñ en un valor de columna.
+    const sucursalCol = columns.find((c) => c.originalName === 'Sucursal');
+    expect(sucursalCol.normalizedKey).toBe('sucursal');
+    expect(rows.map((r) => r.values.sucursal)).toEqual(['Geoplazas', 'Toscana', 'Lomas', 'Satélite']);
+
+    // Celdas vacias (null o cadena vacia) no rompen el parseo.
+    expect(rows[1].values.notas).toBeNull();
+    expect(rows[2].values.instructor).toBe('');
+
+    // Nota larga se preserva completa (no se trunca).
+    expect(rows[0].values.notas).toBe(notaLarga);
+    expect(rows[0].values.notas.length).toBeGreaterThan(100);
+
+    // Folio duplicado: ambas filas se conservan, cada una con sus propios
+    // datos (no se colapsan ni se sobrescriben entre si).
+    const per2001Rows = rows.filter((r) => r.values.folio === 'PER-2001');
+    expect(per2001Rows).toHaveLength(2);
+    expect(per2001Rows.map((r) => r.values.sucursal).sort()).toEqual(['Geoplazas', 'Satélite']);
+
+    // Hora se detecta como texto (formato libre "HH:MM:SS"), no numero.
+    const horaCol = columns.find((c) => c.originalName === 'Hora');
+    expect(horaCol.detectedType).toBe('TEXT');
+
+    // La columna de precio es una mezcla de enteros (499, 250) y un decimal
+    // (899.5): sin signo de moneda, la heuristica NUMBER es la correcta;
+    // forzar CURRENCY aqui daria falsos positivos en columnas numericas
+    // comunes que no son dinero (ver detectType en datasetService.js).
+    const precioCol = columns.find((c) => c.originalName === 'Precio de Venta');
+    expect(precioCol.detectedType).toBe('NUMBER');
+  });
+
+  test('no depende de nombres de columna especificos: cabeceras en otro idioma/orden siguen funcionando', async () => {
+    const buf = await bufferFromRows([
+      ['Customer Name', 'Branch Office', 'Amount Due'],
+      ['Coöperación Ñandú S.A.', 'Sucursal Norte', 1234.56],
+    ]);
+    const { columns, rows } = await parseWorkbook(buf);
+    expect(columns.map((c) => c.normalizedKey)).toEqual(['customer_name', 'branch_office', 'amount_due']);
+    expect(rows[0].values.customer_name).toBe('Coöperación Ñandú S.A.');
+  });
 });
 
 describe('datasetService.daysRemaining / EXPIRY_DAYS', () => {

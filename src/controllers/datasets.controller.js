@@ -83,6 +83,13 @@ const getRows = asyncHandler(async (req, res) => {
   if (req.user.role !== 'ADMIN' && dataset.createdById !== req.user.id) {
     throw new ApiError(403, 'No tienes acceso a este archivo.');
   }
+  // Bloqueo real (no solo visual): un dataset vencido no debe poder usarse
+  // para generar documentos aunque el borrado automatico todavia no haya
+  // corrido (el registro sigue existiendo hasta que deleteExpiredDatasets
+  // lo limpia).
+  if (daysRemaining(dataset.expiresAt) <= 0) {
+    throw new ApiError(410, 'Este archivo ya expiro (45 dias). Los datos ya no estan disponibles.');
+  }
 
   const { search, page = '1', pageSize = '20' } = req.query;
   const where = { datasetId: req.params.id };
